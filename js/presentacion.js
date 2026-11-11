@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 
 // ---------- Interacción de la página (no depende de Three.js) ----------
 const bar = document.getElementById("progress");
@@ -55,8 +56,13 @@ function initVitral() {
   const pivot = new THREE.Group();
   scene.add(pivot);
 
+    const draco = new DRACOLoader();
+  draco.setDecoderPath("https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/gltf/");
+  const loader = new GLTFLoader();
+  loader.setDRACOLoader(draco);
+
   let vitral = null;
-  new GLTFLoader().load("assets/models/vitral1.glb", gltf => {
+  loader.load("assets/models/vitral1.glb", gltf => {
     vitral = gltf.scene;
     vitral.scale.setScalar(8);
     pivot.add(vitral);

@@ -641,4 +641,4 @@ export function createPuntosInterior({
     });
 
     return { mostrar, ocultar, update, cerrarPanel };
-}
+} 
