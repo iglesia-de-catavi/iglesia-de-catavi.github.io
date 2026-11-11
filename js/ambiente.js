@@ -368,8 +368,9 @@ export function createAmbiente({ scene, camera, renderer, bloom, ground, lights,
     }
 
     // ---------- Estado ----------
-    let currentT = 0;
-    let targetT = 0;
+       // ---------- Estado ----------
+    let currentT = 0.5; // 0 = Día · 0.5 = Atardecer · 1 = Noche
+    let targetT = 0.5;
     let time = 0;
     let exteriorVisible = true;
 

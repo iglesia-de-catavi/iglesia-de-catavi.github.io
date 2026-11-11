@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";////////////////////////////////////
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
@@ -10,6 +11,8 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { createInterior } from "./interior.js";
 import { createAmbiente } from "./ambiente.js";
+import { createPuntos, PUNTOS } from "./puntos.js";
+import { createAves } from "./aves.js";
 
 
 // ======================================================
@@ -18,10 +21,6 @@ import { createAmbiente } from "./ambiente.js";
 
 const container = document.querySelector("#viewer");
 const loaderText = document.querySelector("#loader");
-const infoCard = document.querySelector("#infoCard");
-const infoTitle = document.querySelector("#infoTitle");
-const infoText = document.querySelector("#infoText");
-const closeInfo = document.querySelector("#closeInfo");
 
 const btnReset = document.querySelector("#btnReset");
 const btnAuto = document.querySelector("#btnAuto");
@@ -263,7 +262,15 @@ let savedMaxDistance = 65;
 // MODELOS Y VARIABLES
 // ======================================================
 
+const dracoLoader = new DRACOLoader();///////////////////////////////////////
+dracoLoader.setDecoderPath(
+    "https://www.gstatic.com/draco/versioned/decoders/1.5.7/"
+);
+
 const loader = new GLTFLoader();
+loader.setDRACOLoader(dracoLoader);
+
+
 const world = new THREE.Group();
 scene.add(world);
 
@@ -273,6 +280,13 @@ let virgin = null;
 
 let churchBox = null;
 let churchSize = null;
+
+// Palomas y punto dorado de la puerta.
+let aves = null;
+let doorDot = null;
+let doorDotEl = null;
+const doorPos = new THREE.Vector3();
+const _tmp = new THREE.Vector3();
 
 // Cura: "priest" es el modelo; "priestHip" es el pivote de la cadera
 // (para inclinarse en la reverencia) y "priestRig" es el grupo que se mueve.
@@ -299,9 +313,66 @@ let doorTrigger = null;
 let virginCenter = new THREE.Vector3();
 let virginHeight = 1;
 
-const hotspotObjects = [];
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
+
+// ======================================================
+// PUNTOS INTERACTIVOS (js/puntos.js)
+// Los textos y las posiciones se editan en js/puntos.js.
+// ======================================================
+
+const puntos = createPuntos({
+    camera,
+    controls,
+    world,
+    canvas: renderer.domElement,
+
+    // La iglesia exterior (se usa para colocar puntos con la tecla H).
+    getChurch: () => church,
+
+    // Antes de volar a un punto se detienen el giro, el recorrido y el modo caminar.
+    antesDeVolar() {
+        exitWalkMode();
+
+        tourActive = false;
+        autoRotate = false;
+
+        if (btnAuto) {
+            btnAuto.classList.remove("active");
+            const span = btnAuto.querySelector("span");
+            if (span) span.textContent = "Giro automático";
+        }
+
+        if (btnTour) {
+            const span = btnTour.querySelector("span");
+            if (span) span.textContent = "Recorrido guiado";
+        }
+    },
+
+    // El punto de la Virgen abre su vista completa en lugar del panel.
+    alElegirAccion(accion) {
+        if (accion === "virgen") showVirginView();
+    },
+
+    // Mensajes en el texto de estado de la página.
+    mensaje(texto) {
+        if (loaderText) loaderText.textContent = texto;
+    },
+
+    // El modo colocar puntos solo funciona en la vista exterior normal.
+    puedeColocar() {
+        return (
+            !!church &&
+            !showingVirgin &&
+            !walkMode &&
+            !interior.isActive() &&
+            !calibration.active
+        );
+    }
+});
+
+// Lista de puntos: se oculta al ver la Virgen o al entrar al interior.
+const hotspotObjects = puntos.objetos;
 
 // ======================================================
 // INTERIOR DE LA IGLESIA (js/interior.js)
@@ -351,72 +422,34 @@ function enterInterior() {
 
 // ======================================================
 // INFORMACIÓN HISTÓRICA
+// Los textos viven en PUNTOS (js/puntos.js).
 // ======================================================
 
-const stories = [
-    {
-        id: "fachada",
-        title: "La fachada principal",
-        text: "La entrada y la fachada son algunos de los rasgos más reconocibles de la Iglesia de Catavi. Explora sus muros, la puerta y los detalles de su construcción."
-    },
-    {
-        id: "historia",
-        title: "Una iglesia con historia",
-        text: "La historia local sitúa el inicio de la construcción en 1905 y su consagración en 1924. El templo forma parte de la memoria y la identidad de la comunidad de Catavi."
-    },
-    {
-        id: "techo",
-        title: "El techo y la torre",
-        text: "La cubierta y la torre destacan en la silueta del templo. Gira el modelo y cambia el ángulo de cámara para observar sus volúmenes."
-    },
-    {
-        id: "vitral",
-        title: "El vitral",
-        text: "Los vitrales aportan color y luz al interior de los templos. Este punto permite conocer uno de los detalles decorativos representados en el modelo."
-    },
-    {
-        id: "comunidad",
-        title: "Patrimonio de Catavi",
-        text: "La iglesia es un espacio ligado a la vida religiosa y comunitaria. Su representación digital permite explorar el exterior desde diferentes ángulos."
-    },
-    {
-        id: "virgen",
-        title: "Virgen del Buen Consejo",
-        text: ""
-    }
-];
+const stories = PUNTOS;
 
 // ======================================================
-// TARJETAS INFORMATIVAS
+// PANEL INFORMATIVO
 // ======================================================
 
-function showInfo(story) {
-    if (!infoCard || !infoTitle || !infoText) return;
+function showInfo(story, opciones = {}) {
+    if (!story) return;
 
-    infoTitle.textContent = story.title;
-    infoText.textContent = story.text || "";
+    puntos.abrir(story.id, {
+        volar: false,
+        navegacion: opciones.navegacion !== false
+    });
 
-    infoCard.classList.add("visible");
     selectedHotspot = story.id;
 }
 
 function hideInfo() {
-    if (infoCard) {
-        infoCard.classList.remove("visible");
-    }
-
+    puntos.cerrar();
     selectedHotspot = null;
-}
-
-if (closeInfo) {
-    closeInfo.addEventListener("click", event => {
-        event.stopPropagation();
-        hideInfo();
-    });
 }
 
 // ======================================================
 // ETIQUETAS INTERACTIVAS DE LA IGLESIA
+// Los puntos son objetos CSS2D: este renderer los dibuja.
 // ======================================================
 
 const labelRenderer = new CSS2DRenderer();
@@ -430,35 +463,6 @@ Object.assign(labelRenderer.domElement.style, {
 });
 
 container.appendChild(labelRenderer.domElement);
-
-function addHotspot(story, position) {
-    const element = document.createElement("button");
-
-    element.className = "hotspot";
-    element.type = "button";
-    element.title = story.title;
-    element.setAttribute("aria-label", story.title);
-    element.style.pointerEvents = "auto";
-
-    element.addEventListener("click", event => {
-        event.stopPropagation();
-
-        // El punto de la Virgen abre su vista completa.
-        if (story.id === "virgen") {
-            showVirginView();
-            return;
-        }
-
-        showInfo(story);
-    });
-
-    const object = new CSS2DObject(element);
-    object.position.copy(position);
-    world.add(object);
-    hotspotObjects.push(object);
-
-    return object;
-}
 
 // ======================================================
 // VISTA INICIAL Y AJUSTE DE LA IGLESIA
@@ -514,61 +518,9 @@ function centerAndFit(model) {
     // Guardar la vista original para regresar desde la Virgen.
     saveChurchCamera();
 
-    // PUNTOS HISTÓRICOS
-    addHotspot(
-        stories[0],
-        new THREE.Vector3(
-            0,
-            churchSize.y * 0.28,
-            churchSize.z * 0.52
-        )
-    );
-
-    addHotspot(
-        stories[1],
-        new THREE.Vector3(
-            -churchSize.x * 0.42,
-            churchSize.y * 0.43,
-            churchSize.z * 0.2
-        )
-    );
-
-    addHotspot(
-        stories[2],
-        new THREE.Vector3(
-            0,
-            churchSize.y * 0.92,
-            0
-        )
-    );
-
-    addHotspot(
-        stories[3],
-        new THREE.Vector3(
-            churchSize.x * 0.32,
-            churchSize.y * 0.52,
-            churchSize.z * 0.18
-        )
-    );
-
-    addHotspot(
-        stories[4],
-        new THREE.Vector3(
-            -churchSize.x * 0.42,
-            churchSize.y * 0.22,
-            -churchSize.z * 0.25
-        )
-    );
-
-    // Punto adicional que abre la vista de la Virgen.
-    addHotspot(
-        stories[5],
-        new THREE.Vector3(
-            0,
-            churchSize.y * 0.24,
-            churchSize.z * 0.56
-        )
-    );
+    // Los puntos numerados del exterior ya no se crean:
+    // en el exterior solo queda el punto dorado de la puerta.
+    // puntos.crear(churchSize);
 
     // RECORRIDO GUIADO
     tourStops.length = 0;
@@ -616,6 +568,12 @@ function centerAndFit(model) {
     );
 
     createDoorTrigger();
+
+    // Palomas volando alrededor de la iglesia.
+    aves = createAves({ scene, churchSize });
+
+    // Punto dorado de la puerta.
+    createDoorDot();
 }
 
 // Guarda la cámara sin alterar el zoom ni la posición original.
@@ -662,6 +620,55 @@ function createDoorTrigger() {
     doorTrigger.name = "zonaPuertaInterior";
 
     world.add(doorTrigger);
+}
+
+// ======================================================
+// PUNTO DORADO DE LA PUERTA
+// Un solo punto con brillo; al acercarse dice "Pasar adentro".
+// ======================================================
+
+function createDoorDot() {
+    if (doorDot) world.remove(doorDot);
+
+    const wrap = document.createElement("div");
+    wrap.className = "puerta-wrap";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "puerta-punto";
+    btn.setAttribute("aria-label", "Pasar adentro");
+    btn.innerHTML = "<span>Pasar adentro</span>";
+
+    btn.addEventListener("click", event => {
+        event.stopPropagation();
+        if (showingVirgin || walkMode || interior.isActive()) return;
+        enterInterior();
+    });
+
+    wrap.appendChild(btn);
+    doorDotEl = btn;
+
+    doorDot = new CSS2DObject(wrap);
+    doorDot.position.set(0, churchSize.y * 0.22, churchSize.z * 0.53);
+    world.add(doorDot);
+}
+
+function updateDoorDot() {
+    if (!doorDot) return;
+
+    const hide = showingVirgin || walkMode || interior.isActive() || !church;
+    const local = world.worldToLocal(_tmp.copy(camera.position));
+
+    // Solo se ve cuando la cámara está del lado de la fachada.
+    doorDot.visible = !hide && local.z > churchSize.z * 0.25;
+
+    if (doorDot.visible) {
+        doorDot.getWorldPosition(doorPos);
+        doorDotEl.classList.toggle(
+            "cerca",
+            camera.position.distanceTo(doorPos) < churchSize.y * 1.8
+        );
+    }
 }
 
 // ======================================================
@@ -975,7 +982,7 @@ function updatePriest(dt) {
 
 function loadVirgin() {
     loader.load(
-        "assets/models/virgensita.glb",
+        "assets/models/virgensita-draco.glb",
         gltf => {
             virgin = gltf.scene;
 
@@ -1033,7 +1040,7 @@ function loadVirgin() {
         undefined,
         error => {
             console.warn(
-                "No se encontró assets/models/virgensita.glb. " +
+                "No se encontró assets/models/virgensita-draco.glb. " +
                 "Comprueba el nombre y la ubicación del archivo.",
                 error
             );
@@ -1051,13 +1058,16 @@ function showVirginView() {
     if (!virgin) {
         if (loaderText) {
             loaderText.textContent =
-                "No se pudo cargar la Virgen. Revisa assets/models/virgensita.glb.";
+              "No se pudo cargar la Virgen. Revisa assets/models/virgensita-draco.glb.";
         }
 
         return;
     }
 
     if (showingVirgin) return;
+
+    // El modo colocar puntos no se usa en esta vista.
+    puntos.salirDeColocacion();
 
     // Guardar la cámara en el momento de entrar a la vista de la Virgen.
     saveChurchCamera();
@@ -1132,11 +1142,8 @@ function showVirginView() {
 
     virginLight.target.position.copy(center);
 
-    showInfo({
-        id: "virgen",
-        title: "Virgen del Buen Consejo",
-        text: ""
-    });
+    // Panel con el texto de la Virgen (sin botones de anterior / siguiente).
+    showInfo({ id: "virgen" }, { navegacion: false });
 
     if (loaderText) {
         loaderText.textContent = "Virgen del Buen Consejo";
@@ -1378,7 +1385,16 @@ document.addEventListener("keydown", event => {
         return;
     }
 
-    if (!priestRig || !church || showingVirgin || walkMode || interior.isActive()) return;
+    if (
+        !priestRig ||
+        !church ||
+        showingVirgin ||
+        walkMode ||
+        interior.isActive() ||
+        puntos.estaColocando()
+    ) {
+        return;
+    }
 
     startPriestCalibration();
 });
@@ -1393,6 +1409,9 @@ renderer.domElement.addEventListener("click", event => {
         handleCalibrationClick(event);
         return;
     }
+
+    // Con el modo colocar puntos (tecla H) los clics no abren la puerta.
+    if (puntos.estaColocando()) return;
 
     if (!church || !doorTrigger || showingVirgin || walkMode || interior.isActive()) return;
 
@@ -1606,18 +1625,19 @@ if (btnMenu) {
 
 // ======================================================
 // CERRAR INFORMACIÓN
+// El panel se cierra con un clic en la escena (no al arrastrar para girar),
+// con la X o con ESC.
 // ======================================================
 
-renderer.domElement.addEventListener("pointerdown", event => {
-    if (event.target === renderer.domElement) {
-        hideInfo();
+renderer.domElement.addEventListener("click", event => {
+    // Si se arrastró para girar la cámara, no cuenta como clic.
+    if (Math.hypot(event.clientX - pointerDownX, event.clientY - pointerDownY) > 5) {
+        return;
     }
-});
 
-labelRenderer.domElement.addEventListener("pointerdown", event => {
-    if (event.target === labelRenderer.domElement) {
-        hideInfo();
-    }
+    if (calibration.active || puntos.estaColocando()) return;
+
+    hideInfo();
 });
 
 window.addEventListener("keydown", event => {
@@ -1649,6 +1669,10 @@ function animate() {
     requestAnimationFrame(animate);
 
     const dt = Math.min(clock.getDelta(), 0.05);
+
+    // Vuelo de cámara hacia un punto y visibilidad de los puntos.
+    // Va antes de controls.update() para que los controles respeten la nueva posición.
+    puntos.update();
 
     // Si los controles están desactivados (caminar o controlar al cura),
     // no se actualizan para no pisar la cámara.
@@ -1733,7 +1757,7 @@ function animate() {
             controls.update();
 
             if (local < 0.03 && stop.story) {
-                showInfo(stop.story);
+                showInfo(stop.story, { navegacion: false });
             }
         }
     }
@@ -1742,6 +1766,15 @@ function animate() {
     if (virgin && virgin.visible && showingVirgin) {
         virgin.rotation.y += dt * 0.08;
     }
+
+    // Palomas alrededor de la iglesia (solo en la vista exterior).
+    if (aves) {
+        aves.group.visible = !showingVirgin && !interior.isActive();
+        if (aves.group.visible) aves.update(dt);
+    }
+
+    // Punto dorado de la puerta.
+    updateDoorDot();
 
     // Interior: cura autónomo, control del cura y cámaras.
     interior.update(dt);

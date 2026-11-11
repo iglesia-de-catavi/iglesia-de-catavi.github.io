@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";//////////////////////////
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 
@@ -22,7 +23,7 @@ const PIEZAS = [
     resumen: "Composición de vidrio y color vinculada al patrimonio religioso de Catavi, que convierte la luz en parte de la experiencia del espacio sagrado."
   },
   {
-    archivo: "assets/models/virgensita.glb",
+   archivo: "assets/models/virgensita-draco.glb",//////////////////////////////////
     etiqueta: "Advocación mariana",
     titulo: "Virgen del Buen Consejo",
     sobre: "Nuestra Señora del Buen Consejo es una advocación de la Virgen María que representa la protección maternal y la orientación espiritual. Su imagen muestra a María junto al Niño Jesús, transmitiendo una expresión de ternura, cercanía y confianza. Esta advocación tiene su origen en Genazzano, Italia, y forma parte de una tradición religiosa extendida por diferentes comunidades católicas del mundo. En Catavi, representa un símbolo de fe y devoción para sus habitantes.",
@@ -56,7 +57,13 @@ luz.position.set(3, 5, 4);
 scene.add(luz);
 
 // ---------- Carga de piezas ----------
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath(
+    "https://www.gstatic.com/draco/versioned/decoders/1.5.7/"
+);
+
 const loader = new GLTFLoader();
+loader.setDRACOLoader(dracoLoader);//////////////////
 const cache = new Map();
 let actual = 0;
 let modelo = null;

@@ -1,0 +1,46 @@
+/* ===== Punto dorado de la puerta (modelo3d.html) ===== */
+.puerta-wrap { pointer-events: none; }
+
+.puerta-punto {
+  pointer-events: auto;
+  cursor: pointer;
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff6c8 0%, #ffd45a 45%, #d9a21b 100%);
+  box-shadow: 0 0 12px 4px rgba(255, 210, 90, .75), 0 0 28px 10px rgba(255, 190, 50, .35);
+  animation: puertaBrillo 2s ease-in-out infinite;
+}
+
+.puerta-punto span {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  margin-top: 10px;
+  white-space: nowrap;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(8, 13, 24, .88);
+  border: 1px solid rgba(255, 215, 0, .5);
+  color: #ffe9a8;
+  font: 600 13px Inter, sans-serif;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s;
+}
+
+.puerta-punto.cerca span { opacity: 1; }
+
+@keyframes puertaBrillo { 50% { transform: scale(1.18); } }
+
+/* ===== Línea de fuente (letra pequeña) ===== */
+.fuente-iglesia {
+  margin-top: 10px;
+  font-size: 11px;
+  font-style: italic;
+  color: rgba(255, 255, 255, .55);
+}

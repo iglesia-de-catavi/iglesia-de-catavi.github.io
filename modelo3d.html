@@ -25,6 +25,8 @@
     <!-- Estilos de la página -->
     <link rel="stylesheet" href="css/modelo3d.css">
     <link rel="stylesheet" href="css/sol.css">
+    <link rel="stylesheet" href="css/puntos.css">
+    <link rel="stylesheet" href="css/extras.css">
 
     <!-- Importación de Three.js -->
     <script
@@ -36,7 +38,8 @@
     {
         "imports": {
             "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+            "three-mesh-bvh": "https://unpkg.com/three-mesh-bvh@0.6.8/build/index.module.js"
         }
     }
     </script>
@@ -157,7 +160,7 @@
     <!-- AYUDA PARA EXPLORAR LA ESCENA -->
     <div id="hint" class="hint">
         Arrastra para girar · Usa la rueda para acercarte o alejarte
-        · Pulsa los puntos para conocer la historia
+        · Pulsa el punto dorado de la puerta para entrar
     </div>
 
     <!-- AYUDA DEL MODO CAMINAR -->
@@ -166,10 +169,10 @@
         Mueve el ratón para mirar y pulsa ESC para salir.
     </div>
 
-    <!-- TARJETA DE INFORMACIÓN -->
+    <!-- PANEL DE INFORMACIÓN DE LOS PUNTOS -->
     <section
         id="infoCard"
-        class="info-card"
+        class="punto-panel"
         role="status"
         aria-live="polite"
         aria-atomic="true"
@@ -177,25 +180,41 @@
         <button
             type="button"
             id="closeInfo"
-            class="close-info"
+            class="punto-cerrar"
             aria-label="Cerrar información"
             title="Cerrar información"
         >
             ×
         </button>
 
-        <span id="infoKicker" class="info-kicker">
-            IGLESIA DE CATAVI
-        </span>
+        <span id="infoKicker" class="punto-kicker" hidden></span>
 
         <h2 id="infoTitle"></h2>
 
-        <p id="infoText"></p>
+        <div id="infoSobreWrap" class="punto-seccion">
+            <h3>Sobre este lugar</h3>
+            <p id="infoText"></p>
+        </div>
+
+        <div id="infoCuriosoWrap" class="punto-seccion punto-curioso" hidden>
+            <h3>Dato curioso</h3>
+            <p id="infoCurioso"></p>
+        </div>
+
+        <p id="infoFuente" class="punto-fuente" hidden></p>
+
+        <div id="infoNav" class="punto-nav" hidden>
+            <button type="button" id="infoPrev">‹ Anterior</button>
+            <button type="button" id="infoNext">Siguiente ›</button>
+        </div>
     </section>
 
 
     <!-- JAVASCRIPT DEL RECORRIDO 3D -->
     <script type="module" src="js/iglesia.js"></script>
+
+    <!-- MÚSICA (mus_3d en esta página) -->
+    <script src="js/musica.js"></script>
 
 </body>
 </html>

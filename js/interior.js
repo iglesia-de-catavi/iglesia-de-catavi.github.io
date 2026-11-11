@@ -1,14 +1,18 @@
 import * as THREE from "three";
+import { createPuntosInterior } from "./puntosInterior.js";
 
 // ======================================================
 // INTERIOR DE LA IGLESIA
 // - Se carga solo cuando se hace clic en la puerta (ahorra carga inicial).
 // - Al entrar empiezas en PRIMERA PERSONA, junto a la puerta, mirando al altar.
 //     W A S D caminar · SHIFT correr · arrastra el ratón para mirar.
+//     RUEDA: alejar / acercar la cámara · E / Q: subir / bajar la cámara.
 // - Tecla C: controlar al cura (cámara detrás y por encima de él).
 //            C otra vez: lo sueltas y vuelves a primera persona.
 // - Tecla V: cambia de cámara (primera persona → atrás → hombros).
 // - Tecla L: encender / apagar la luz del interior.
+// - Puntos dorados: clic = zoom a la figura + ficha (js/puntosInterior.js).
+// - Tecla P: modo ubicar puntos (copia la posición de lo que toques).
 // - La cámara NUNCA sale de la estructura: choca con paredes, techo y suelo,
 //   y además está limitada al tamaño del interior.
 // ======================================================
@@ -85,7 +89,11 @@ export function createInterior(ctx) {
     let camYaw = 0;
     let camPitch = 0;        // positivo = mira hacia abajo, negativo = hacia arriba
     let camZoom = 1;
+    let camLift = 0;         // altura extra de la cámara (teclas E / Q)
+    let fpDist = 0;          // alejamiento en primera persona (rueda)
+    let wasFly = false;      // true = estabas volando sobre las bancas (cámara elevada)
     let camSnap = false;
+    let focus = null;        // zoom a una figura (punto dorado)
     let timeAcc = 0;
 
     let floorLevel = 0;
@@ -215,11 +223,12 @@ export function createInterior(ctx) {
 
         help.textContent = controlling
             ? "Controlas al cura: W A S D para moverte · SHIFT para correr · " +
-              "arrastra el ratón para mirar · rueda para acercar · " +
+              "arrastra el ratón para mirar · rueda: retroceder o acercar · E / Q: subir o bajar (arriba avanzas sobre las bancas) · " +
               "V cambia la cámara · L la luz · C lo suelta (primera persona)"
             : "Primera persona: W A S D para caminar · SHIFT para correr · " +
-              "arrastra el ratón para mirar · C para controlar al cura · " +
-              "V cambia la cámara · L la luz · botón Salir al exterior para volver";
+              "arrastra el ratón para mirar · rueda: retroceder o acercar · E / Q: subir o bajar (arriba avanzas sobre las bancas) · " +
+              "pulsa los puntos dorados para conocer cada figura · " +
+              "C para controlar al cura · V cámara · L luz · botón Salir al exterior para volver";
     }
 
     function createUI() {
@@ -854,10 +863,51 @@ export function createInterior(ctx) {
     }
 
     // ---------- TÚ EN PRIMERA PERSONA ----------
+    // Con la cámara elevada (tecla E) solo cuentan las paredes a esa altura:
+    // puedes avanzar por encima de las bancas, el altar y los escalones.
+    function moveFly(p, dx, dz) {
+        const camY = Math.min(p.y + CONFIG.eyeHeight + camLift, ceilingLevel - 0.5);
+
+        for (const [ax, az] of [[dx, dz], [dx, 0], [0, dz]]) {
+            if (Math.abs(ax) < 1e-5 && Math.abs(az) < 1e-5) continue;
+
+            const len = Math.hypot(ax, az);
+            const base = Math.atan2(ax, az);
+            let blocked = false;
+
+            for (const h of [camY, camY - 1.2]) {
+                for (const off of [-0.5, 0, 0.5]) {
+                    _b.set(p.x, h, p.z);
+                    if (wallRay(_b, Math.sin(base + off), Math.cos(base + off), CONFIG.radius + len)) {
+                        blocked = true;
+                    }
+                }
+            }
+            if (blocked) continue;
+
+            p.x += ax;
+            p.z += az;
+            keepInside(p);
+            return true;
+        }
+
+        return false;
+    }
+
+    // Al bajar de nuevo: te pone en el suelo libre más cercano (no encima de una banca).
+    function settleWalker() {
+        walker.copy(findFreeSpot(walker.x, walker.z));
+    }
+
     function updateWalker(dt) {
         if (!inputDirection(move)) return;
 
         const speed = keys.ShiftLeft || keys.ShiftRight ? CONFIG.fpRunSpeed : CONFIG.fpWalkSpeed;
+
+        if (camLift > 1.0) {
+            moveFly(walker, move.x * speed * dt, move.z * speed * dt);
+            return;
+        }
 
         moveBody(
             walker,
@@ -911,11 +961,12 @@ export function createInterior(ctx) {
 
         viewDirection();
 
-        pivot.set(p.x, p.y + CONFIG.priestHeight * 0.88 + cfg.lift, p.z);
+        pivot.set(p.x, p.y + CONFIG.priestHeight * 0.88 + cfg.lift + camLift, p.z);
         pivot.x += -Math.cos(camYaw) * cfg.side;
         pivot.z += Math.sin(camYaw) * cfg.side;
 
         desired.copy(pivot).addScaledVector(forward, -cfg.distance * camZoom);
+        desired.y = Math.max(desired.y, pivot.y - 0.8); // la cámara no se hunde hacia el suelo
         clipCamera(pivot, desired);
         constrainCamera(desired);
 
@@ -925,6 +976,7 @@ export function createInterior(ctx) {
         } else {
             camera.position.lerp(desired, 1 - Math.exp(-14 * dt));
         }
+        camera.position.y = Math.max(camera.position.y, pivot.y - 0.8);
 
         // Revisión final: entre el cura y la cámara nunca puede haber una pared.
         clipCamera(pivot, camera.position);
@@ -935,21 +987,138 @@ export function createInterior(ctx) {
         controls.target.copy(lookAt);
     }
 
-    // Primera persona: la cámara son tus ojos.
+    // Primera persona: la cámara son tus ojos (y con la rueda se aleja hacia atrás).
     function updateFirstPerson() {
-        const eyeY = Math.min(walker.y + CONFIG.eyeHeight, headroom(walker));
+        const top = headroom(walker);
+        const eyeY = Math.min(walker.y + CONFIG.eyeHeight, top);
 
-        camera.position.set(walker.x, Math.max(eyeY, walker.y + 0.6), walker.z);
-        constrainCamera(camera.position);
+        pivot.set(
+            walker.x,
+            Math.min(Math.max(eyeY, walker.y + 0.6) + camLift, top),
+            walker.z
+        );
+        constrainCamera(pivot);
 
         viewDirection();
+
+        if (fpDist > 0.05) {
+            // Retrocedes como si caminaras hacia atrás (en horizontal) y subes un poco
+            // para ver por encima de las bancas. Nunca sales de la estructura.
+            _e.set(forward.x, 0, forward.z);
+            if (_e.lengthSq() < 1e-4) _e.set(Math.sin(camYaw), 0, Math.cos(camYaw));
+            _e.normalize();
+
+            desired.copy(pivot).addScaledVector(_e, -fpDist);
+            desired.y += fpDist * 0.15;
+            clipCamera(pivot, desired);
+            constrainCamera(desired);
+            camera.position.copy(desired);
+        } else {
+            camera.position.copy(pivot);
+        }
+
         lookAt.copy(camera.position).addScaledVector(forward, 6);
         camera.lookAt(lookAt);
         controls.target.copy(lookAt);
     }
 
+    // ---------- ZOOM A UNA FIGURA (punto dorado) ----------
+    // La cámara se acerca hasta ver la figura completa. Se suelta con la X de
+    // la ficha, ESC o al caminar (W A S D): vuelves donde estabas.
+    function focusOn(point, tam = 1.5) {
+        if (!active || busy) return;
+
+        const half = THREE.MathUtils.degToRad(camera.fov / 2);
+        const distIdeal = clamp((tam / 2) / Math.tan(half) * 1.5 + 0.6, 1.2, 18);
+        const tapa = Math.max(0.8, tam * 0.6); // lo que haya muy cerca de la figura (su base) no cuenta como obstáculo
+
+        // Dirección preferida: desde donde estás tú.
+        _e.set(camera.position.x - point.x, 0, camera.position.z - point.z);
+        if (_e.lengthSq() < 0.01) _e.set(-naveDir.x, 0, -naveDir.z);
+        const base = Math.atan2(_e.x, _e.z);
+
+        const offsets = [0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2, 1.6, -1.6, 2.0, -2.0, 2.5, -2.5, Math.PI];
+        const m = CONFIG.wallMargin + 0.3;
+        const from = new THREE.Vector3();
+        const toCam = new THREE.Vector3();
+        const previous = rc.firstHitOnly;
+        let pos = null;
+
+        rc.firstHitOnly = false;
+
+        // Se prueban varios lugares alrededor de la figura (y cada vez más cerca)
+        // hasta hallar uno dentro de la iglesia, con suelo y sin paredes en medio.
+        search:
+        for (const f of [1, 0.7, 0.45]) {
+            const dist = Math.max(1.2, distIdeal * f);
+
+            for (const off of offsets) {
+                const a = base + off;
+                const cx = point.x + Math.sin(a) * dist;
+                const cz = point.z + Math.cos(a) * dist;
+
+                if (
+                    cx < bounds.min.x + m || cx > bounds.max.x - m ||
+                    cz < bounds.min.z + m || cz > bounds.max.z - m
+                ) continue;
+
+                let eyeY = clamp(point.y, floorLevel + 2.2, floorLevel + 4.5);
+                const gy = groundAtFrom(cx, cz, eyeY, eyeY - floorLevel + 3);
+                if (gy === null) continue;
+                eyeY = Math.max(eyeY, gy + 2.2);
+
+                from.set(cx, eyeY, cz);
+                toCam.copy(from).sub(point);
+                const len = toCam.length();
+                if (len < 0.5) continue;
+                toCam.divideScalar(len);
+
+                rc.set(point, toCam);
+                rc.near = 0;
+                rc.far = Math.max(0.1, len - 0.1);
+
+                const blocked = rc.intersectObjects(collidables, false).some(h => h.distance > tapa);
+                if (blocked) continue;
+
+                pos = from.clone();
+                break search;
+            }
+        }
+
+        rc.firstHitOnly = previous;
+
+        if (!pos) {
+            console.warn("Zoom a la figura: no hallé un lugar despejado; la cámara se queda donde está.");
+            pos = camera.position.clone();
+        }
+        constrainCamera(pos);
+
+        focus = {
+            pos,
+            look: point.clone(),
+            cur: focus ? focus.cur.clone() : lookAt.clone()
+        };
+        dragging = false;
+    }
+
+    function releaseFocus() {
+        if (!focus) return;
+        focus = null;
+        pins.cerrarPanel();
+    }
+
+    function updateFocus(dt) {
+        const k = 1 - Math.exp(-4 * dt);
+
+        camera.position.lerp(focus.pos, k);
+        focus.cur.lerp(focus.look, k);
+        camera.lookAt(focus.cur);
+        controls.target.copy(focus.cur);
+    }
+
     function setControl(on) {
         if (!active || on === controlling) return;
+        releaseFocus();
         controlling = on;
         dragging = false;
 
@@ -972,6 +1141,7 @@ export function createInterior(ctx) {
     // V: primera persona → atrás → hombros → primera persona
     function cycleCamera() {
         if (!active) return;
+        releaseFocus();
 
         if (!controlling) {
             camMode = "back";
@@ -991,6 +1161,11 @@ export function createInterior(ctx) {
         if (!active) return;
 
         keys[event.code] = true;
+
+        // Caminar o ESC sueltan el zoom a la figura.
+        if (focus && /^(KeyW|KeyA|KeyS|KeyD|Arrow\w+|Escape)$/.test(event.code)) {
+            releaseFocus();
+        }
 
         if (event.repeat) return;
         if (event.code === "KeyC") setControl(!controlling);
@@ -1014,7 +1189,7 @@ export function createInterior(ctx) {
     const canvas = renderer.domElement;
 
     canvas.addEventListener("pointerdown", event => {
-        if (!active || busy) return;
+        if (!active || busy || focus) return;
         dragging = true;
         lastX = event.clientX;
         lastY = event.clientY;
@@ -1024,7 +1199,7 @@ export function createInterior(ctx) {
         if (!dragging) return;
 
         // En primera persona puedes mirar más arriba (techo, vitrales).
-        const minPitch = controlling ? -0.6 : -1.3;
+        const minPitch = controlling ? -0.25 : -1.3;
         const maxPitch = controlling ? 1.1 : 1.3;
 
         camYaw -= (event.clientX - lastX) * 0.005;
@@ -1037,11 +1212,33 @@ export function createInterior(ctx) {
         dragging = false;
     });
 
+    // Rueda: alejar / acercar la cámara (con el cura y en primera persona).
     canvas.addEventListener(
         "wheel",
         event => {
-            if (!active || !controlling) return;
-            camZoom = clamp(camZoom * (1 + Math.sign(event.deltaY) * 0.08), 0.5, 2.5);
+            if (!active || busy) return;
+            const s = Math.sign(event.deltaY);
+
+            if (focus) {
+                // Mirando una figura: la rueda te hace retroceder (o acercarte) sin soltarla.
+                _e.set(focus.pos.x - focus.look.x, 0, focus.pos.z - focus.look.z);
+                let d = _e.length();
+                if (d < 0.01) return;
+                _e.divideScalar(d);
+
+                d = clamp(d * (1 + s * 0.12) + s * 0.2, 1, 32);
+                focus.pos.x = focus.look.x + _e.x * d;
+                focus.pos.z = focus.look.z + _e.z * d;
+                focus.pos.y += s * 0.12;
+                constrainCamera(focus.pos); // nunca sale de la iglesia
+                return;
+            }
+
+            if (controlling) {
+                camZoom = clamp(camZoom * (1 + s * 0.08), 0.5, 4);
+            } else {
+                fpDist = clamp(fpDist + s * (0.8 + fpDist * 0.12), 0, 30);
+            }
         },
         { passive: true }
     );
@@ -1199,6 +1396,9 @@ export function createInterior(ctx) {
         setExteriorVisible(false);
         scene.add(root, lights, rig);
 
+        // Puntos dorados del interior (crucifijo, altar, cura, santos, vitrales, cuadros).
+        pins.mostrar();
+
         scene.background.set("#0c0a09");
         if (scene.fog) scene.fog.density = 0;
 
@@ -1228,7 +1428,11 @@ export function createInterior(ctx) {
         dragging = false;
         camMode = "back";
         camZoom = 1;
+        camLift = 0;
+        fpDist = 0;
+        wasFly = false;
         camSnap = false;
+        focus = null;
         active = true;
 
         createUI();
@@ -1250,6 +1454,8 @@ export function createInterior(ctx) {
         controlling = false;
         dragging = false;
         active = false;
+        releaseFocus();
+        pins.ocultar();
         Object.keys(keys).forEach(k => (keys[k] = false));
 
         scene.remove(root, lights, rig);
@@ -1298,7 +1504,28 @@ export function createInterior(ctx) {
             applyLight();
         }
 
-        if (controlling) {
+        // E sube la cámara, Q la baja.
+        const lift = (keys.KeyE ? 1 : 0) - (keys.KeyQ ? 1 : 0);
+        if (lift && !focus) {
+            camLift = clamp(
+                camLift + lift * 4 * dt,
+                -0.8,
+                ceilingLevel - floorLevel - CONFIG.eyeHeight
+            );
+        }
+
+        // Al dejar de volar, el cuerpo vuelve al suelo libre más cercano.
+        const fly = !controlling && camLift > 1.0;
+        if (!focus) {
+            if (wasFly && !fly && !controlling) settleWalker();
+            wasFly = fly;
+        }
+
+        if (focus) {
+            // Mirando una figura de cerca: el cura sigue paseando.
+            if (!controlling) updateWander(dt);
+            updateFocus(dt);
+        } else if (controlling) {
             updateControlled(dt);
             updateThirdPerson(dt);
         } else {
@@ -1306,7 +1533,33 @@ export function createInterior(ctx) {
             updateWalker(dt);
             updateFirstPerson();
         }
+
+        pins.update(dt);
     }
+
+    // ---------- PUNTOS DORADOS DEL INTERIOR ----------
+    const pins = createPuntosInterior({
+        scene,
+        camera,
+        canvas: renderer.domElement,
+        getRoot: () => root,
+        getCollidables: () => collidables,
+        getInfo: () => ({
+            naveDir,
+            naveLen,
+            width: Math.abs(naveDir.x) ? size.z : size.x,
+            center,
+            floorY: floorLevel,
+            ceilY: ceilingLevel,
+            crucifixBox,
+            priest: rig,
+            priestHeight: CONFIG.priestHeight,
+            controlling
+        }),
+        isActive: () => active,
+        focusOn,
+        releaseFocus
+    });
 
     return {
         enter,

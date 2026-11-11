@@ -21,7 +21,7 @@
       <span class="brand-mark">✦</span>
       <span><strong>Iglesia de Catavi</strong><small>Patrimonio Histórico</small></span>
     </a>
-    <button class="nav-toggle" id="navToggle" aria-label="Menú">☰</button>
+    <button type="button" class="nav-toggle" id="navToggle" aria-label="Menú" aria-controls="navLinks" aria-expanded="false">☰</button>
     <nav class="nav-links" id="navLinks">
       <a href="index.html">Inicio</a>
       <a href="historia.html">Historia</a>
@@ -59,18 +59,18 @@
 </section>
 
 <!-- VISOR -->
-<div class="lightbox" id="lightbox" aria-hidden="true">
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Visor de imágenes" aria-hidden="true">
   <div class="lb-top">
     <span id="lbCount"></span>
     <div class="lb-tools">
-      <button id="lbPlay" title="Pase automático (barra espaciadora)">▶</button>
-      <button id="lbZoom" title="Zoom (doble clic)">⤢</button>
-      <a id="lbDown" title="Descargar" download>⬇</a>
-      <button id="lbClose" aria-label="Cerrar">✕</button>
+      <button type="button" id="lbPlay" title="Pase automático (barra espaciadora)" aria-label="Pase automático">▶</button>
+      <button type="button" id="lbZoom" title="Zoom (doble clic)" aria-label="Zoom">⤢</button>
+      <a id="lbDown" href="#" title="Descargar" aria-label="Descargar imagen" download>⬇</a>
+      <button type="button" id="lbClose" aria-label="Cerrar">✕</button>
     </div>
   </div>
-  <button class="lb-nav lb-prev" id="lbPrev" aria-label="Anterior">‹</button>
-  <button class="lb-nav lb-next" id="lbNext" aria-label="Siguiente">›</button>
+  <button type="button" class="lb-nav lb-prev" id="lbPrev" aria-label="Anterior">‹</button>
+  <button type="button" class="lb-nav lb-next" id="lbNext" aria-label="Siguiente">›</button>
   <div class="lb-stage" id="lbStage"><img id="lbImg" src="" alt="" draggable="false"></div>
   <div class="lb-info"><h3 id="lbTitle"></h3><p id="lbDesc"></p></div>
   <div class="lb-thumbs" id="lbThumbs"></div>
@@ -87,6 +87,7 @@
 </footer>
 
 <script src="js/menu.js"></script>
+<script src="js/musica.js"></script>
 <script src="js/galeria.js"></script>
 </body>
 </html>
