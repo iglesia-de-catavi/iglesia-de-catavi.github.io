@@ -12,6 +12,7 @@ import { createPuntosInterior } from "./puntosInterior.js";
 // - Tecla V: cambia de cámara (primera persona → atrás → hombros).
 // - Tecla L: encender / apagar la luz del interior.
 // - Puntos dorados: clic = zoom a la figura + ficha (js/puntosInterior.js).
+// - Punto de la puerta: clic = sales al exterior con un destello de luz.
 // - Tecla P: modo ubicar puntos (copia la posición de lo que toques).
 // - La cámara NUNCA sale de la estructura: choca con paredes, techo y suelo,
 //   y además está limitada al tamaño del interior.
@@ -24,6 +25,7 @@ export function createInterior(ctx) {
     const CONFIG = {
         modelPath: "assets/models/interior-iglesia-final.glb",
         priestPath: "assets/models/cura.glb",
+        virginPath: "assets/models/virgensita-draco.glb", // la Virgen que aparece entre rayos de luz
 
         // El interior se escala para que su lado más largo mida esto (metros).
         lengthMeters: 32,
@@ -49,14 +51,19 @@ export function createInterior(ctx) {
         // (la consola del navegador, F12, te dice cuál probar).
         altarSide: "auto",
 
+        // En "auto" la dirección de la nave se deduce sola y en tu iglesia salía al revés
+        // (el altar y la puerta intercambiados). true = se invierte, que es lo correcto.
+        // Si algún día ves todo al revés, pon false.
+        invertirNave: true,
+
         // ---- VISTA INICIAL (al entrar) ----
         intro: {
             // Palabras que identifican al crucifijo en el .glb (separadas por |).
             // Con eso la cámara se inclina justo lo necesario para verlo COMPLETO.
             crucifix: "crucifij|cristo|jesus|jesús|christ|cross|cruz",
-            backFromDoor: 2.5, // metros que te separas de la pared de la puerta
-            lookUp: 0.12,      // inclinación hacia arriba si no se encuentra el crucifijo (radianes)
-            priestAt: 0.36     // dónde empieza el cura: 0 = centro, 0.5 = pared del altar
+            backFromAltar: 2.5, // metros que te separas de la pared del altar (ahí empiezas)
+            lookUp: 0,          // inclinación hacia arriba al empezar (radianes; 0 = mirar recto)
+            priestAhead: 2.0    // metros delante de ti (hacia la puerta) donde aparece el cura
         },
 
         // Altura del suelo en metros (0 = punto más bajo del modelo).
@@ -95,6 +102,7 @@ export function createInterior(ctx) {
     let camSnap = false;
     let focus = null;        // zoom a una figura (punto dorado)
     let timeAcc = 0;
+    let escapePending = false; // empezaste dentro de un mueble (mesa): al caminar te saca al suelo libre
 
     let floorLevel = 0;
     let ceilingLevel = 0;
@@ -149,8 +157,9 @@ export function createInterior(ctx) {
 
     const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
     const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+    const smooth = x => { const k = clamp(x, 0, 1); return k * k * (3 - 2 * k); };
 
-    // ---------- PANTALLA NEGRA DE TRANSICIÓN ----------
+    // ---------- PANTALLA DE TRANSICIÓN (negra, o de luz para el destello) ----------
     const overlay = document.createElement("div");
     Object.assign(overlay.style, {
         position: "fixed", inset: "0", zIndex: "50", background: "#05070d",
@@ -161,14 +170,24 @@ export function createInterior(ctx) {
     });
     document.body.appendChild(overlay);
 
-    async function showOverlay(text) {
+    // Modo "luz": pantalla de luz blanca y dorada (la usa el destello de la Virgen
+    // al entrar y el destello de la puerta al salir).
+    const LUZ_FONDO =
+        "radial-gradient(circle at 50% 50%, #ffffff 0%, #fff6d6 40%, #ffe08a 100%)";
+
+    async function showOverlay(text, luz = false) {
+        overlay.style.background = luz ? LUZ_FONDO : "#05070d";
+        overlay.style.color = luz ? "#7a5410" : "#ffe27a";
+        overlay.style.transition = "opacity .6s ease";
         overlay.textContent = text;
         overlay.style.pointerEvents = "auto";
         overlay.style.opacity = "1";
-        await wait(520);
+        await wait(luz ? 650 : 520);
     }
 
-    function hideOverlay() {
+    // lento = true: la luz se disipa despacio (2 s) en vez de cortarse.
+    function hideOverlay(lento = false) {
+        overlay.style.transition = lento ? "opacity 2s ease" : "opacity .5s ease";
         overlay.style.opacity = "0";
         overlay.style.pointerEvents = "none";
     }
@@ -643,6 +662,8 @@ export function createInterior(ctx) {
             if (Math.abs(off) > 1) sign = Math.sign(off);
         }
 
+        if (CONFIG.invertirNave && !/^[+-][xz]$/.test(side)) sign = -sign;
+
         naveDir.set(alongX ? sign : 0, 0, alongX ? 0 : sign);
         naveLen = alongX ? size.x : size.z;
 
@@ -651,6 +672,17 @@ export function createInterior(ctx) {
             `Si al entrar ves la puerta en vez del altar, pon CONFIG.altarSide = ` +
             `"${sign > 0 ? "-" : "+"}${alongX ? "x" : "z"}".`
         );
+    }
+
+    // ¿Hay una superficie horizontal justo sobre la cabeza (mesa, tarima, coro bajo)?
+    function underSurface(x, gy, z) {
+        _c.set(x, gy + 0.3, z);
+        rc.set(_c, UP);
+        rc.near = 0;
+        rc.far = 1.9;
+
+        const hit = rc.intersectObjects(collidables, false)[0];
+        return !!hit && Math.abs(hitNormalY(hit)) > 0.5;
     }
 
     // Punto libre (con suelo y sin paredes cerca) lo más cerca posible de x, z.
@@ -664,7 +696,7 @@ export function createInterior(ctx) {
                 const z = baseZ + Math.cos(a) * r;
                 const gy = groundAtFrom(x, z, floorLevel + 0.8, 1.6);
 
-                if (gy !== null && isClear(x, gy, z)) {
+                if (gy !== null && isClear(x, gy, z) && !underSurface(x, gy, z)) {
                     return new THREE.Vector3(x, gy, z);
                 }
             }
@@ -674,11 +706,11 @@ export function createInterior(ctx) {
         return new THREE.Vector3(baseX, floorLevel, baseZ);
     }
 
-    // Tu punto de partida: en el pasillo central, junto a la puerta, con el cielo despejado.
+    // Tu punto de partida: junto a la mesa del altar, con el cielo despejado.
     function findIntroSpot() {
-        const start = -(naveLen / 2 - CONFIG.intro.backFromDoor);
+        const start = naveLen / 2 - CONFIG.intro.backFromAltar;
 
-        for (let t = start; t <= 0; t += 1) {
+        for (let t = start; t >= 0; t -= 1) {
             const x = center.x + naveDir.x * t;
             const z = center.z + naveDir.z * t;
             const gy = groundAtFrom(x, z, floorLevel + 0.8, 1.6);
@@ -691,39 +723,65 @@ export function createInterior(ctx) {
         return null;
     }
 
-    // Coloca al cura cerca del altar y a ti en la puerta, mirando al altar con el crucifijo completo.
+    // Empiezas junto a la mesa del altar mirando hacia la puerta. El cura espera atrás de
+    // la estatua del santo (oculto): cuando la Virgen se va, sale de ahí y empieza a caminar.
     function placeIntro() {
-        const priestT = naveLen * CONFIG.intro.priestAt;
-        const priestSpot = findFreeSpot(
-            center.x + naveDir.x * priestT,
-            center.z + naveDir.z * priestT
+        const t0 = naveLen / 2 - CONFIG.intro.backFromAltar;
+
+        walker.copy(
+            findIntroSpot() ||
+            findFreeSpot(center.x + naveDir.x * t0, center.z + naveDir.z * t0)
         );
 
-        rig.position.copy(priestSpot);
-        rig.rotation.set(0, Math.atan2(-naveDir.x, -naveDir.z), 0); // mira hacia la puerta
+        // Hacia la puerta (horizontal).
+        const hx = -naveDir.x;
+        const hz = -naveDir.z;
+
+        // Atrás de la estatua del santo (visto desde donde empiezas). Si no se encuentra
+        // la estatua, queda detrás de ti.
+        const santo = pins.posicion("san-jose");
+        let tx = walker.x - hx * 3;
+        let tz = walker.z - hz * 3;
+
+        if (santo) {
+            _e.set(santo.x - walker.x, 0, santo.z - walker.z);
+            if (_e.lengthSq() < 0.01) _e.set(hx, 0, hz);
+            _e.normalize();
+
+            tx = santo.x + _e.x * 1.4;
+            tz = santo.z + _e.z * 1.4;
+        }
+
+        rig.position.copy(findFreeSpot(tx, tz));
+        rig.rotation.set(0, Math.atan2(hx, hz), 0);
         ai.target = null;
         ai.wait = 1;
 
-        walker.copy(findIntroSpot() || findFreeSpot(center.x, center.z));
-
-        camYaw = Math.atan2(naveDir.x, naveDir.z);
+        camYaw = Math.atan2(hx, hz);
         camPitch = -CONFIG.intro.lookUp;
+    }
 
-        if (crucifixBox) {
-            crucifixBox.getCenter(_e);
-            const dist = (_e.x - walker.x) * naveDir.x + (_e.z - walker.z) * naveDir.z;
+    // Te coloca a unos 2,4 m de una figura (la de su punto dorado), mirándola.
+    // Si no se encontró la figura, queda la vista inicial normal.
+    function placeNearFigure(id) {
+        const p = pins.posicion(id);
+        if (!p) return false;
 
-            if (dist > 1) {
-                // Se inclina solo lo necesario para que la punta del crucifijo
-                // quede al 88 % de la altura de la pantalla.
-                const half = THREE.MathUtils.degToRad(camera.fov / 2);
-                const edge = Math.atan(0.88 * Math.tan(half));
-                const eyeY = walker.y + CONFIG.eyeHeight;
-                const up = Math.atan((crucifixBox.max.y + 0.4 - eyeY) / dist);
+        // Desde la figura hacia el centro de la nave (en horizontal).
+        _e.set(center.x - p.x, 0, center.z - p.z);
+        if (_e.lengthSq() < 0.25) _e.set(-naveDir.x, 0, -naveDir.z);
+        _e.normalize();
 
-                camPitch = -clamp(up - edge, 0, 0.3);
-            }
-        }
+        walker.copy(findFreeSpot(p.x + _e.x * 2.4, p.z + _e.z * 2.4));
+
+        const dx = p.x - walker.x;
+        const dz = p.z - walker.z;
+        const eyeY = walker.y + CONFIG.eyeHeight;
+
+        camYaw = Math.atan2(dx, dz);
+        camPitch = clamp(Math.atan2(eyeY - p.y, Math.hypot(dx, dz)), -0.4, 0.5);
+
+        return true;
     }
 
     // Al soltar al cura: tú empiezas a caminar donde estaba la cámara.
@@ -901,6 +959,13 @@ export function createInterior(ctx) {
 
     function updateWalker(dt) {
         if (!inputDirection(move)) return;
+
+        // Si empezaste dentro de la mesa del altar, al primer paso te saca al suelo libre.
+        if (escapePending) {
+            escapePending = false;
+            settleWalker();
+            return;
+        }
 
         const speed = keys.ShiftLeft || keys.ShiftRight ? CONFIG.fpRunSpeed : CONFIG.fpWalkSpeed;
 
@@ -1316,7 +1381,7 @@ export function createInterior(ctx) {
         });
 
         if (hasBVH) {
-            overlay.textContent = "Preparando colisiones…";
+            overlay.textContent = "Cargando Experiencia...";
             await wait(30);
 
             for (let i = 0; i < collidables.length; i++) {
@@ -1324,7 +1389,7 @@ export function createInterior(ctx) {
 
                 if (i % 4 === 0) {
                     overlay.textContent =
-                        `Preparando colisiones… ${Math.round((i / collidables.length) * 100)}%`;
+                        `Cargando experiencia…… ${Math.round((i / collidables.length) * 100)}%`;
                     await wait(0);
                 }
             }
@@ -1354,18 +1419,347 @@ export function createInterior(ctx) {
             console.warn("No se pudo cargar cura.glb para el interior:", error);
         }
 
+        try {
+            virginGltf = await loader.loadAsync(CONFIG.virginPath);
+        } catch (error) {
+            console.warn("No se pudo cargar la Virgen para el efecto de aparición:", error);
+        }
+
         buildPriest(priestGltf);
         buildLights();
+        buildApparition();
 
         loaded = true;
     }
 
+    // ---------- APARICIÓN GLORIOSA DE LA VIRGEN ----------
+    // Aparece sobre la puerta, donde miras al empezar, envuelta en luz dorada:
+    // un resplandor suave, haces de luz que se abren detrás de ella y chispas que suben.
+    // Al ENTRAR: deslumbra mientras se disipa el destello y luego se eleva y se desvanece;
+    //            en ese momento sale el cura y empieza a caminar.
+    // Al SALIR:  aparece deslumbrante y su luz te lleva al exterior.
+    const APAR = { height: 4.2, base: 2.3, glowSize: 12, shafts: 18, shaftLength: 13, sparks: 140 };
+
+    let virginGltf = null;
+    let aparGroup = null;
+    let aparVirgin = null;
+    let aparGlow = null;
+    let aparCore = null;
+    let aparShaftsGroup = null;
+    let aparSparks = null;
+    const aparShafts = [];
+    const aparMats = [];
+    const apar = { mode: null, t: 0, base: new THREE.Vector3() };
+
+    const rnd = i => {
+        const x = Math.sin(i * 127.1 + 311.7) * 43758.5453;
+        return x - Math.floor(x);
+    };
+
+    function glowTexture() {
+        const c = document.createElement("canvas");
+        c.width = c.height = 256;
+
+        const g = c.getContext("2d");
+        const gr = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+        gr.addColorStop(0, "rgba(255,250,225,1)");
+        gr.addColorStop(0.25, "rgba(255,226,140,.65)");
+        gr.addColorStop(0.6, "rgba(255,200,90,.18)");
+        gr.addColorStop(1, "rgba(255,190,70,0)");
+        g.fillStyle = gr;
+        g.fillRect(0, 0, 256, 256);
+
+        const tex = new THREE.CanvasTexture(c);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+    }
+
+    // Haz de luz: brillante en la base, se desvanece hacia la punta y hacia los lados.
+    function shaftTexture() {
+        const w = 64;
+        const h = 256;
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+
+        const g = c.getContext("2d");
+        const img = g.createImageData(w, h);
+
+        for (let y = 0; y < h; y++) {
+            const along = Math.pow(1 - y / (h - 1), 1.4);
+
+            for (let x = 0; x < w; x++) {
+                const across = Math.pow(1 - Math.abs((x - (w - 1) / 2) / ((w - 1) / 2)), 1.6);
+                const i = (y * w + x) * 4;
+
+                img.data[i] = 255;
+                img.data[i + 1] = 238;
+                img.data[i + 2] = 190;
+                img.data[i + 3] = Math.round(255 * along * across);
+            }
+        }
+
+        g.putImageData(img, 0, 0);
+
+        const tex = new THREE.CanvasTexture(c);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+    }
+
+    function sparkTexture() {
+        const c = document.createElement("canvas");
+        c.width = c.height = 64;
+
+        const g = c.getContext("2d");
+        const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+        gr.addColorStop(0, "rgba(255,255,255,1)");
+        gr.addColorStop(0.3, "rgba(255,240,190,.7)");
+        gr.addColorStop(1, "rgba(255,230,150,0)");
+        g.fillStyle = gr;
+        g.fillRect(0, 0, 64, 64);
+
+        return new THREE.CanvasTexture(c);
+    }
+
+    function buildApparition() {
+        aparGroup = new THREE.Group();
+        aparGroup.visible = false;
+
+        const chest = APAR.height * 0.6;
+
+        // Haces de luz que se abren detrás de la Virgen (en un plano de cara a la nave).
+        aparShaftsGroup = new THREE.Group();
+        aparShaftsGroup.position.set(0, chest, -0.5);
+
+        const shaftTex = shaftTexture();
+        const planeGeo = new THREE.PlaneGeometry(1, 1);
+        planeGeo.translate(0, 0.5, 0); // el giro es desde la base del haz
+
+        for (let i = 0; i < APAR.shafts; i++) {
+            const mat = new THREE.MeshBasicMaterial({
+                map: shaftTex, color: 0xffe9b0, transparent: true, opacity: 0,
+                depthWrite: false, blending: THREE.AdditiveBlending,
+                side: THREE.DoubleSide, toneMapped: false
+            });
+
+            const mesh = new THREE.Mesh(planeGeo, mat);
+            mesh.rotation.z = (i / APAR.shafts) * Math.PI * 2 + (rnd(i) - 0.5) * 0.25;
+            mesh.scale.set(0.5 + 1.1 * rnd(i + 100), APAR.shaftLength * (0.55 + 0.45 * rnd(i + 50)), 1);
+
+            aparShaftsGroup.add(mesh);
+            aparShafts.push({
+                mat,
+                base: 0.3 + 0.4 * rnd(i + 150),
+                speed: 1.2 + 1.6 * rnd(i + 200),
+                phase: rnd(i + 250) * 6.28
+            });
+        }
+
+        aparGroup.add(aparShaftsGroup);
+
+        // Resplandor suave detrás de ella.
+        const spriteMat = tex => new THREE.SpriteMaterial({
+            map: tex, color: 0xffe2a0, transparent: true, opacity: 0,
+            depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false
+        });
+
+        const glowTex = glowTexture();
+
+        aparGlow = new THREE.Sprite(spriteMat(glowTex));
+        aparGlow.scale.set(APAR.glowSize, APAR.glowSize, 1);
+        aparGlow.position.set(0, chest, -0.3);
+        aparGroup.add(aparGlow);
+
+        aparCore = new THREE.Sprite(spriteMat(glowTex));
+        aparCore.scale.set(APAR.glowSize * 0.4, APAR.glowSize * 0.4, 1);
+        aparCore.position.set(0, chest, -0.15);
+        aparGroup.add(aparCore);
+
+        // Chispas de luz que suben.
+        const pos = new Float32Array(APAR.sparks * 3);
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+
+        aparSparks = new THREE.Points(geo, new THREE.PointsMaterial({
+            map: sparkTexture(), size: 0.2, sizeAttenuation: true, color: 0xfff1c4,
+            transparent: true, opacity: 0, depthWrite: false,
+            blending: THREE.AdditiveBlending, toneMapped: false
+        }));
+        aparSparks.frustumCulled = false;
+        aparGroup.add(aparSparks);
+
+        // La Virgen (el mismo modelo del exterior, con brillo propio).
+        if (virginGltf) {
+            aparVirgin = virginGltf.scene;
+
+            const box = new THREE.Box3().setFromObject(aparVirgin);
+            const sz = box.getSize(new THREE.Vector3());
+            aparVirgin.scale.multiplyScalar(APAR.height / Math.max(sz.y, 0.001));
+            aparVirgin.updateMatrixWorld(true);
+
+            box.setFromObject(aparVirgin);
+            const c = box.getCenter(new THREE.Vector3());
+            aparVirgin.position.set(-c.x, -box.min.y, -c.z);
+
+            aparVirgin.traverse(o => {
+                if (!o.isMesh) return;
+                o.castShadow = false;
+                o.receiveShadow = false;
+                o.frustumCulled = false;
+
+                (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
+                    m.transparent = true;
+                    if (m.emissive) {
+                        m.emissive.set(0xffe9b8);
+                        if (m.map) m.emissiveMap = m.map;
+                    }
+                    m.needsUpdate = true;
+                    aparMats.push(m);
+                });
+            });
+
+            aparGroup.add(aparVirgin);
+        }
+    }
+
+    // La coloca sobre la puerta (la pared del fondo, mirando desde el centro de la nave).
+    function placeApparition() {
+        _a.set(center.x, floorLevel + 1.6, center.z);
+        _d.set(-naveDir.x, 0, -naveDir.z); // hacia la puerta
+
+        const previous = rc.firstHitOnly;
+        rc.firstHitOnly = true;
+        rc.near = 0;
+        rc.far = naveLen;
+        rc.set(_a, _d);
+
+        const hit = rc.intersectObjects(collidables, false)[0];
+        rc.firstHitOnly = previous;
+
+        const dist = Math.max(0.5, (hit ? hit.distance : naveLen / 2) - 1.0);
+
+        apar.base.set(
+            center.x - naveDir.x * dist,
+            floorLevel + APAR.base,
+            center.z - naveDir.z * dist
+        );
+
+        aparGroup.position.copy(apar.base);
+        aparGroup.rotation.set(0, Math.atan2(naveDir.x, naveDir.z), 0); // de cara a la nave
+    }
+
+    function startApparition(mode) {
+        if (!aparGroup) return;
+
+        placeApparition();
+        apar.mode = mode;
+        apar.t = 0;
+
+        if (aparGroup.parent !== scene) scene.add(aparGroup);
+        aparGroup.visible = true;
+    }
+
+    // Cuando la Virgen se va (al entrar), el cura sale de detrás de la estatua y empieza a caminar.
+    function revealPriest() {
+        if (!rig) return;
+        rig.visible = true;
+        ai.target = null;
+        ai.wait = 0.4;
+    }
+
+    function stopApparition() {
+        const mode = apar.mode;
+        apar.mode = null;
+
+        if (aparGroup) {
+            aparGroup.visible = false;
+            scene.remove(aparGroup);
+        }
+
+        if (mode === "entrar") revealPriest();
+    }
+
+    function updateApparition(dt) {
+        if (!apar.mode || !aparGroup) return;
+
+        apar.t += dt;
+        const t = apar.t;
+
+        let vis, ray, glow, scale, lift, emis, spark;
+
+        if (apar.mode === "salir") {
+            // Aparece deslumbrante.
+            vis = smooth(t / 0.9);
+            ray = smooth(t / 1.2);
+            glow = smooth(t / 1.0);
+            scale = 0.88 + 0.12 * smooth(t / 1.2);
+            lift = 0;
+            emis = 1 + 3 * smooth(t / 1.0);
+            spark = smooth(t / 1.0);
+        } else {
+            // Entrar: deslumbra mientras se disipa el destello y luego se eleva y se desvanece.
+            const go = smooth((t - 2.0) / 2.4);
+
+            vis = 1 - go;
+            ray = (1 + 0.3 * smooth(t / 1.5)) * (1 - smooth((t - 2.2) / 2.4));
+            glow = 1 - smooth((t - 2.4) / 2.2);
+            scale = 1 + 0.15 * smooth((t - 1.6) / 3);
+            lift = smooth((t - 2.0) / 2.8);
+            emis = 3.5 - 2.5 * smooth((t - 2.0) / 2.4);
+            spark = 1 - smooth((t - 2.6) / 2.0);
+
+            if (t > 4.8) {
+                stopApparition();
+                return;
+            }
+        }
+
+        aparMats.forEach(m => {
+            m.opacity = vis;
+            m.emissiveIntensity = emis;
+        });
+
+        aparGroup.scale.setScalar(scale);
+        aparGroup.position.set(apar.base.x, apar.base.y + lift, apar.base.z);
+
+        // Resplandor.
+        const pulse = 0.88 + 0.12 * Math.sin(t * 5);
+        aparGlow.material.opacity = clamp(glow, 0, 1) * pulse;
+        aparCore.material.opacity = clamp(glow, 0, 1) * 0.9 * pulse;
+
+        // Haces de luz: se abren y brillan con calma.
+        aparShaftsGroup.scale.setScalar(0.5 + 0.5 * clamp(ray, 0, 1.3));
+        aparShaftsGroup.rotation.z = t * 0.05;
+
+        aparShafts.forEach(sh => {
+            sh.mat.opacity =
+                clamp(ray, 0, 1.3) * sh.base * (0.65 + 0.35 * Math.sin(t * sh.speed + sh.phase));
+        });
+
+        // Chispas que suben alrededor de ella.
+        const arr = aparSparks.geometry.attributes.position.array;
+
+        for (let i = 0; i < APAR.sparks; i++) {
+            const k = (rnd(i + 300) + t * (0.08 + 0.1 * rnd(i + 400))) % 1;
+
+            arr[i * 3] = (rnd(i + 500) - 0.5) * 4.4 + Math.sin(t * 0.8 + i) * 0.15;
+            arr[i * 3 + 1] = k * APAR.height * 1.5;
+            arr[i * 3 + 2] = (rnd(i + 600) - 0.5) * 1.2;
+        }
+
+        aparSparks.geometry.attributes.position.needsUpdate = true;
+        aparSparks.material.opacity = clamp(spark, 0, 1) * 0.9;
+    }
+
     // ---------- ENTRAR / SALIR ----------
-    async function enter() {
+    // opts.luz:   la transición es una pantalla de luz que se disipa despacio.
+    // opts.spawn: id de una figura ("virgen"): apareces a unos 2,4 m de ella, mirándola.
+    async function enter(opts = {}) {
         if (active || busy) return;
         busy = true;
 
-        await showOverlay("Entrando a la iglesia…");
+        const luz = !!opts.luz;
+        await showOverlay(luz ? "" : "Entrando a la iglesia…", luz);
 
         try {
             await ensureLoaded();
@@ -1396,7 +1790,8 @@ export function createInterior(ctx) {
         setExteriorVisible(false);
         scene.add(root, lights, rig);
 
-        // Puntos dorados del interior (crucifijo, altar, cura, santos, vitrales, cuadros).
+        // Puntos dorados del interior (crucifijo, altar, cura, santos, vitrales, cuadros,
+        // confesionarios y puerta).
         pins.mostrar();
 
         scene.background.set("#0c0a09");
@@ -1423,6 +1818,7 @@ export function createInterior(ctx) {
 
         // El cura cerca del altar; tú en la puerta, mirando al altar.
         placeIntro();
+        escapePending = underSurface(walker.x, walker.y, walker.z);
 
         controlling = false;
         dragging = false;
@@ -1441,15 +1837,30 @@ export function createInterior(ctx) {
         updateFirstPerson();
         controls.update();
 
-        hideOverlay();
+        if (luz) {
+            overlay.textContent = "";
+            startApparition("entrar"); // la Virgen deslumbra sobre la puerta y se desvanece
+        }
+        rig.visible = !luz; // con el efecto, el cura sale cuando la Virgen se va
+        hideOverlay(luz);
         busy = false;
     }
 
-    async function exit() {
+    // Al salir (por el punto de la puerta o por el botón) la Virgen aparece deslumbrante
+    // sobre la puerta y su luz te lleva al exterior. Pasa { luz: false } para salir sin efecto.
+    async function exit(opts = {}) {
         if (!active || busy) return;
         busy = true;
 
-        await showOverlay("Saliendo al exterior…");
+        const luz = opts.luz !== false;
+
+        if (luz && aparGroup) {
+            startApparition("salir");
+            await wait(1400);
+        }
+
+        await showOverlay(luz ? "" : "Saliendo al exterior…", luz);
+        stopApparition();
 
         controlling = false;
         dragging = false;
@@ -1458,6 +1869,7 @@ export function createInterior(ctx) {
         pins.ocultar();
         Object.keys(keys).forEach(k => (keys[k] = false));
 
+        rig.visible = true;
         scene.remove(root, lights, rig);
         removeUI();
 
@@ -1485,7 +1897,8 @@ export function createInterior(ctx) {
         const loaderText = document.querySelector("#loader");
         if (loaderText) loaderText.textContent = "Arrastra para girar el modelo";
 
-        hideOverlay();
+        if (luz) overlay.textContent = "";
+        hideOverlay(luz);
         busy = false;
     }
 
@@ -1534,6 +1947,7 @@ export function createInterior(ctx) {
             updateFirstPerson();
         }
 
+        updateApparition(dt);
         pins.update(dt);
     }
 
@@ -1552,13 +1966,14 @@ export function createInterior(ctx) {
             floorY: floorLevel,
             ceilY: ceilingLevel,
             crucifixBox,
-            priest: rig,
+            priest: rig && rig.visible ? rig : null,
             priestHeight: CONFIG.priestHeight,
             controlling
         }),
         isActive: () => active,
         focusOn,
-        releaseFocus
+        releaseFocus,
+        onSalir: () => exit({ luz: true })
     });
 
     return {

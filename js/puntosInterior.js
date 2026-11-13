@@ -7,10 +7,24 @@ import { CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
 // auto:   si no lo encuentra por nombre, usa una posición aproximada.
 // pos:    [x, y, z] exacto (tecla P dentro de la iglesia, clic sobre la figura).
 // cura:   true → el punto sigue al cura.
+// lado:   -1 o 1 → un confesionario a cada lado de la puerta.
+// salir:  true → al hacer clic no abre ficha, te lleva al exterior.
 // ======================================================
 
 export const FUENTE =
     "Información proporcionada por quienes atienden la Iglesia de Catavi.";
+
+// Para explicaciones generales (no son datos propios de esta iglesia).
+const FUENTE_GENERAL =
+    "Explicación general de la tradición católica; no es un dato específico de esta iglesia.";
+
+// Posiciones fijas de los puntos. Se llenan con el botón "Copiar todas las posiciones"
+// del modo ubicar (tecla P): pega aquí lo que se copia y quedan para siempre.
+// Formato:  "nombre#numero": [x, y, z],
+const POSICIONES_FIJAS = {
+};
+
+const CLAVE_GUARDADO = "catavi-puntos-interior-v1";
 
 export const PUNTOS_INTERIOR = [
     {
@@ -88,6 +102,47 @@ export const PUNTOS_INTERIOR = [
         texto:
             "Pintura religiosa que acompaña las paredes de la nave y invita a la oración y " +
             "a la reflexión."
+    },
+
+    // Confesionarios (a los lados de la puerta): la información va dividida en dos puntos.
+    {
+        id: "confesionario-a",
+        titulo: "El confesionario",
+        buscar: "confesion|confession|confess",
+        lado: -1,
+        auto: "confesionarios",
+        tam: 2.6,
+        fuente: FUENTE_GENERAL,
+        texto:
+            "Mueble de madera con cortinas donde el sacerdote atiende a las personas que " +
+            "desean confesarse. Suele tener un compartimento central para el sacerdote y, " +
+            "a los lados, espacios para quien se acerca a confesar. La madera y las cortinas " +
+            "dan privacidad para que cada persona pueda hablar con tranquilidad."
+    },
+    {
+        id: "confesionario-b",
+        titulo: "Sacramento de la reconciliación",
+        buscar: "confesion|confession|confess",
+        lado: 1,
+        auto: "confesionarios",
+        tam: 2.6,
+        fuente: FUENTE_GENERAL,
+        texto:
+            "En la tradición católica, este mueble sirve para celebrar el sacramento de la " +
+            "reconciliación, también llamado confesión. La persona reconoce sus faltas con " +
+            "arrepentimiento, el sacerdote la escucha y la aconseja, y le da la absolución " +
+            "en nombre de la Iglesia.\n\n" +
+            "Lo que se dice en confesión está protegido por el secreto sacramental: el " +
+            "sacerdote no puede revelarlo."
+    },
+
+    // Puerta: al hacer clic no abre ficha, te lleva al exterior (donde está la Virgen).
+    {
+        id: "puerta",
+        titulo: "Salir al exterior",
+        salir: true,
+        auto: "puerta",
+        tam: 2.4
     }
 
     // Punto ubicado a mano con la tecla P:
@@ -122,16 +177,32 @@ const CSS = `
 .pi-toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:60;max-width:90%;
   padding:10px 16px;border-radius:10px;background:rgba(5,8,18,.92);border:1px solid rgba(255,215,0,.4);
   color:#fff;font:13px/1.5 Inter,sans-serif;text-align:center;display:none}
+.pi-edit{position:fixed;top:20px;left:20px;z-index:61;width:min(320px,calc(100% - 40px));padding:14px 16px;
+  border:1px solid rgba(255,215,0,.5);border-radius:12px;background:rgba(5,8,18,.94);color:#fff;
+  font:13px/1.5 Inter,sans-serif;display:none}
+.pi-edit b{color:#ffe27a;font-size:15px}
+.pi-edit p{margin:6px 0 10px}
+.pi-edit select,.pi-edit button{display:block;width:100%;margin:0 0 8px;padding:8px 10px;border-radius:8px;
+  border:1px solid rgba(255,215,0,.4);background:#101a30;color:#ffe9a8;font:600 12px Inter,sans-serif;cursor:pointer}
+.pi-edit small{color:rgba(255,255,255,.55)}
 `;
 
 export function createPuntosInterior({
-    scene, camera, canvas, getRoot, getCollidables, getInfo, isActive, focusOn, releaseFocus
+    scene, camera, canvas, getRoot, getCollidables, getInfo, isActive, focusOn, releaseFocus, onSalir
 }) {
     let items = [];
     let built = false;
     let panelOpen = false;
     let colocando = false;
     let frame = 0;
+
+    // Posiciones que tú ajustaste con el modo ubicar (se guardan en este navegador).
+    let guardados = {};
+    try {
+        guardados = JSON.parse(localStorage.getItem(CLAVE_GUARDADO) || "{}") || {};
+    } catch (e) {
+        guardados = {};
+    }
 
     const rc = new THREE.Raycaster();
     rc.firstHitOnly = true;
@@ -194,7 +265,7 @@ export function createPuntosInterior({
     }
 
     // ---- Posiciones aproximadas (cuando no se encuentra el objeto por nombre) ----
-    function posicionesAuto(tipo) {
+    function posicionesAuto(tipo, def = {}) {
         const i = getInfo();
         if (!i) return [];
 
@@ -235,7 +306,79 @@ export function createPuntosInterior({
             return salida;
         }
 
+        if (tipo === "puerta") {
+            return [{ pos: puntoPuerta().pos, tam: 2.4 }];
+        }
+
+        if (tipo === "confesionarios") {
+            return [{ pos: puntoConfesionario(def.lado || 1), tam: 2.6 }];
+        }
+
         return [];
+    }
+
+    // ---- La puerta de entrada, medida con un rayo desde el centro de la nave ----
+    function puntoPuerta() {
+        const i = getInfo();
+        const sentido = new THREE.Vector3(-i.naveDir.x, 0, -i.naveDir.z); // de la nave hacia la puerta
+        const origen = new THREE.Vector3(i.center.x, i.floorY + 1.6, i.center.z);
+        const previo = rc.firstHitOnly;
+
+        rc.firstHitOnly = true;
+        rc.near = 0;
+        rc.far = i.naveLen;
+        rc.set(origen, sentido);
+
+        const hit = rc.intersectObjects(getCollidables(), false)[0];
+        rc.firstHitOnly = previo;
+
+        const dist = hit ? hit.distance : i.naveLen / 2;
+        const pos = origen.clone().addScaledVector(sentido, Math.max(0.5, dist - 0.5));
+
+        return { pos, sentido };
+    }
+
+    // ---- Un confesionario a cada lado de la puerta (lado = -1 o 1) ----
+    // Dos rayos laterales a lo largo de la pared de la puerta: uno desde el centro
+    // hacia afuera (cara interior del mueble) y otro desde la pared lateral hacia
+    // adentro (cara exterior). El punto va en el medio. Si no se miden bien,
+    // se usan DESVIO metros desde el centro de la puerta.
+    function puntoConfesionario(lado) {
+        const DESVIO = 3.2;
+        const i = getInfo();
+        const col = getCollidables();
+        const puerta = puntoPuerta();
+        const lat = new THREE.Vector3(-i.naveDir.z, 0, i.naveDir.x).multiplyScalar(lado);
+        const medio = i.width / 2;
+        const previo = rc.firstHitOnly;
+
+        rc.firstHitOnly = true;
+        rc.near = 0;
+
+        rc.far = medio;
+        rc.set(puerta.pos, lat);
+        const dentro = rc.intersectObjects(col, false)[0];
+
+        const lejos = medio - 0.25;
+        rc.far = lejos;
+        rc.set(puerta.pos.clone().addScaledVector(lat, lejos), lat.clone().negate());
+        const fuera = rc.intersectObjects(col, false)[0];
+
+        rc.firstHitOnly = previo;
+
+        let centro = DESVIO;
+
+        if (dentro && fuera) {
+            const d1 = dentro.distance;
+            const d2 = lejos - fuera.distance;
+            if (d2 - d1 > 1.0 && d2 - d1 < 4.5) centro = (d1 + d2) / 2;
+        }
+
+        const pos = puerta.pos.clone().addScaledVector(lat, centro);
+        pos.addScaledVector(puerta.sentido, -0.7); // sobre la cara frontal del mueble
+        pos.y = i.floorY + 1.4;
+
+        return pos;
     }
 
     // ---- Buscar objetos por nombre dentro del .glb ----
@@ -439,6 +582,40 @@ export function createPuntosInterior({
                 return;
             }
 
+            // Punto de salida (la puerta): se mide con un rayo.
+            if (def.salir) {
+                posicionesAuto(def.auto, def).forEach(a =>
+                    salida.push({ def, pos: a.pos, tam: def.tam || a.tam })
+                );
+                return;
+            }
+
+            // Un confesionario a cada lado de la puerta (def.lado = -1 o 1).
+            if (def.lado) {
+                const info = getInfo();
+                const latV = new THREE.Vector3(-info.naveDir.z, 0, info.naveDir.x);
+                const lat = v => (v.x - info.center.x) * latV.x + (v.z - info.center.z) * latV.z;
+                const grupo = buscarNombre(root, def, ts).filter(
+                    h => Math.sign(lat(h.centro)) === def.lado && Math.abs(lat(h.centro)) > 1
+                );
+
+                if (grupo.length) {
+                    const c = new THREE.Vector3();
+                    grupo.forEach(h => c.add(h.centro));
+                    c.divideScalar(grupo.length);
+                    salida.push({ def, pos: c, tam: def.tam || 2.6 });
+                } else {
+                    console.warn(
+                        `Punto "${def.id}": no hallé /${def.buscar}/; lo ubico junto a la puerta. ` +
+                        "Para afinarlo usa la tecla P y pon pos: [x, y, z]."
+                    );
+                    posicionesAuto(def.auto, def).forEach(a =>
+                        salida.push({ def, pos: a.pos, tam: def.tam || a.tam })
+                    );
+                }
+                return;
+            }
+
             const hallados = buscarNombre(root, def, ts);
 
             if (!hallados.length) {
@@ -447,7 +624,7 @@ export function createPuntosInterior({
                         `Punto "${def.id}": no hallé /${def.buscar}/; uso posición aproximada. ` +
                         "Para afinarla usa la tecla P y pon pos: [x, y, z]."
                     );
-                    posicionesAuto(def.auto).forEach(a =>
+                    posicionesAuto(def.auto, def).forEach(a =>
                         salida.push({ def, pos: a.pos, tam: def.tam || a.tam })
                     );
                 } else {
@@ -492,7 +669,7 @@ export function createPuntosInterior({
             } else if (nombrado) {
                 salida.push({ def, pos: nombrado.centro, tam: def.tam || nombrado.tam });
             } else if (def.auto) {
-                posicionesAuto(def.auto).forEach(a =>
+                posicionesAuto(def.auto, def).forEach(a =>
                     salida.push({ def, pos: a.pos, tam: def.tam || a.tam })
                 );
             } else {
@@ -503,11 +680,11 @@ export function createPuntosInterior({
         return salida;
     }
 
-    function crearItem({ def, pos, tam, dyn }) {
+    function crearItem({ def, pos, tam, dyn, key }) {
         const wrap = document.createElement("div");
         wrap.className = "pi-wrap";
 
-        const item = { def, pos, tam, dyn: !!dyn, obj: null, tapado: false };
+        const item = { def, pos, tam, dyn: !!dyn, key: key || def.id, obj: null, tapado: false };
 
         const b = document.createElement("button");
         b.type = "button";
@@ -516,6 +693,15 @@ export function createPuntosInterior({
         b.innerHTML = `<span>${def.titulo}</span>`;
         b.addEventListener("click", e => {
             e.stopPropagation();
+            // En modo ubicar, pulsar un punto lo elige para moverlo.
+            if (colocando) {
+                if (!item.dyn) seleccionar(item);
+                return;
+            }
+            if (def.salir) {
+                if (onSalir) onSalir();
+                return;
+            }
             abrir(def, item.pos.clone(), item.tam);
         });
         wrap.appendChild(b);
@@ -534,7 +720,20 @@ export function createPuntosInterior({
         if (built || !root) return;
         built = true;
 
-        items = resolver(root).map(crearItem);
+        const nombres = new Set();
+        root.traverse(o => { if (o.name) nombres.add(o.name); });
+        console.log("Nombres de objetos del interior:", Array.from(nombres));
+
+        const conteo = {};
+        items = resolver(root).map(e => {
+            const n = (conteo[e.def.id] = (conteo[e.def.id] || 0) + 1);
+            e.key = `${e.def.id}#${n}`;
+
+            const fijo = guardados[e.key] || POSICIONES_FIJAS[e.key];
+            if (fijo) e.pos = new THREE.Vector3(fijo[0], fijo[1], fijo[2]);
+
+            return crearItem(e);
+        });
 
         PUNTOS_INTERIOR.filter(d => d.cura).forEach(def => {
             items.push(crearItem({ def, pos: new THREE.Vector3(), tam: def.tam || 3, dyn: true }));
@@ -556,6 +755,7 @@ export function createPuntosInterior({
         items.forEach(it => (it.obj.visible = false));
         cerrarPanel();
         colocando = false;
+        editor.style.display = "none";
         toastEl.style.display = "none";
     }
 
@@ -595,7 +795,7 @@ export function createPuntosInterior({
                 it.tapado = rc.intersectObjects(colisiones, false).length > 0;
             }
 
-            let visible = delante && !it.tapado && dist < 45;
+            let visible = delante && (colocando || !it.tapado) && dist < 45;
             if (it.dyn && info && (info.controlling || dist < 1.5)) visible = false;
 
             it.obj.visible = visible;
@@ -603,14 +803,71 @@ export function createPuntosInterior({
     }
 
     // ---- Herramienta para ubicar puntos (tecla P) ----
+    // 1) Elige un punto en la lista (o púlsalo en pantalla).
+    // 2) Haz clic sobre la figura en el modelo: el punto se mueve ahí y se guarda solo.
+    const editor = document.createElement("div");
+    editor.className = "pi-edit";
+    editor.innerHTML =
+        "<b>Ubicar puntos</b>" +
+        "<p>1) Elige un punto de la lista (o púlsalo en pantalla).<br>" +
+        "2) Haz clic sobre la figura en el modelo: el punto se mueve ahí y queda guardado.</p>" +
+        '<select class="pi-sel"></select>' +
+        '<button type="button" class="pi-copiar">Copiar todas las posiciones</button>' +
+        '<button type="button" class="pi-borrar">Borrar mis ajustes</button>' +
+        "<small>P para cerrar</small>";
+    document.body.appendChild(editor);
+
+    const selEl = editor.querySelector(".pi-sel");
+    let elegido = null;
+
+    const redondear = n => Math.round(n * 100) / 100;
+
+    function refrescarLista() {
+        selEl.innerHTML = "";
+        items.filter(it => !it.dyn).forEach(it => {
+            const op = document.createElement("option");
+            op.value = it.key;
+            op.textContent = `${it.def.titulo} (${it.key})`;
+            selEl.appendChild(op);
+        });
+        if (elegido) selEl.value = elegido.key;
+        else elegido = items.find(it => it.key === selEl.value) || null;
+    }
+
+    function seleccionar(it) {
+        elegido = it;
+        selEl.value = it.key;
+        toast(`Elegido: ${it.def.titulo}. Ahora haz clic sobre la figura en el modelo.`);
+    }
+
+    selEl.addEventListener("change", () => {
+        elegido = items.find(it => it.key === selEl.value) || null;
+        selEl.blur();
+    });
+
+    editor.querySelector(".pi-copiar").addEventListener("click", () => {
+        const lineas = items
+            .filter(it => !it.dyn)
+            .map(it => `    "${it.key}": [${redondear(it.pos.x)}, ${redondear(it.pos.y)}, ${redondear(it.pos.z)}],`);
+        const texto = "const POSICIONES_FIJAS = {\n" + lineas.join("\n") + "\n};";
+
+        console.log("Pega esto en js/puntosInterior.js (reemplaza POSICIONES_FIJAS):\n" + texto);
+        if (navigator.clipboard) navigator.clipboard.writeText(texto).catch(() => {});
+        toast("Copiado. Pégalo en js/puntosInterior.js reemplazando POSICIONES_FIJAS.");
+    });
+
+    editor.querySelector(".pi-borrar").addEventListener("click", () => {
+        guardados = {};
+        try { localStorage.removeItem(CLAVE_GUARDADO); } catch (e) { /* nada */ }
+        toast("Ajustes borrados. Sal y entra de nuevo a la iglesia para ver las posiciones originales.");
+    });
+
     document.addEventListener("keydown", e => {
         if (!isActive() || e.code !== "KeyP" || e.repeat) return;
         colocando = !colocando;
-        toast(
-            colocando
-                ? "Modo ubicar: haz clic sobre la figura y se copia su posición. P para salir."
-                : "Modo ubicar desactivado."
-        );
+        editor.style.display = colocando ? "block" : "none";
+        if (colocando) refrescarLista();
+        toast(colocando ? "Modo ubicar activado." : "Modo ubicar desactivado.", 2500);
     });
 
     let downX = 0;
@@ -621,6 +878,11 @@ export function createPuntosInterior({
         if (!colocando || !isActive()) return;
         if (Math.hypot(e.clientX - downX, e.clientY - downY) > 5) return;
 
+        if (!elegido) {
+            toast("Primero elige un punto de la lista.");
+            return;
+        }
+
         const r = canvas.getBoundingClientRect();
         ptr.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
         rc.setFromCamera(ptr, camera);
@@ -630,15 +892,22 @@ export function createPuntosInterior({
         const hit = rc.intersectObjects(getCollidables(), false)[0];
         if (!hit) return;
 
-        const f = n => Math.round(n * 100) / 100;
-        const linea =
-            `{ id: "nuevo", titulo: "Título", pos: [${f(hit.point.x)}, ${f(hit.point.y)}, ${f(hit.point.z)}], ` +
-            `tam: 1.5, texto: "Qué es..." },`;
+        elegido.pos.copy(hit.point);
+        elegido.obj.position.copy(elegido.pos);
+        guardados[elegido.key] = [redondear(hit.point.x), redondear(hit.point.y), redondear(hit.point.z)];
 
-        console.log("Pega esto en PUNTOS_INTERIOR (js/puntosInterior.js):\n" + linea);
-        if (navigator.clipboard) navigator.clipboard.writeText(linea).catch(() => {});
-        toast("Copiado. Pégalo en PUNTOS_INTERIOR y cambia id, título y texto.");
+        try {
+            localStorage.setItem(CLAVE_GUARDADO, JSON.stringify(guardados));
+        } catch (err) { /* nada */ }
+
+        toast(`"${elegido.def.titulo}" movido y guardado.`);
     });
 
-    return { mostrar, ocultar, update, cerrarPanel };
-} 
+    // Posición de un punto ya creado (por ejemplo "virgen"), o null.
+    function posicion(id) {
+        const it = items.find(x => x.def.id === id);
+        return it ? it.pos.clone() : null;
+    }
+
+    return { mostrar, ocultar, update, cerrarPanel, posicion };
+}
